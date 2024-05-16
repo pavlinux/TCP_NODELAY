@@ -1,0 +1,71 @@
+diff --git a/include/net/netns/ipv4.h b/include/net/netns/ipv4.h
+index 9b0d8649a..bd5a0f763 100644
+--- a/include/net/netns/ipv4.h
++++ b/include/net/netns/ipv4.h
+@@ -166,6 +166,7 @@ struct netns_ipv4 {
+ 	int sysctl_tcp_min_rtt_wlen;
+ 	u8 sysctl_tcp_min_tso_segs;
+ 	u8 sysctl_tcp_autocorking;
++	u8 sysctl_tcp_nodelay;
+ 	u8 sysctl_tcp_reflect_tos;
+ 	int sysctl_tcp_invalid_ratelimit;
+ 	int sysctl_tcp_pacing_ss_ratio;
+diff --git a/net/ipv4/sysctl_net_ipv4.c b/net/ipv4/sysctl_net_ipv4.c
+index 59ba518a8..542ae8fc6 100644
+--- a/net/ipv4/sysctl_net_ipv4.c
++++ b/net/ipv4/sysctl_net_ipv4.c
+@@ -1220,6 +1220,15 @@ static struct ctl_table ipv4_net_table[] = {
+ 		.extra1		= SYSCTL_ZERO,
+ 		.extra2		= SYSCTL_ONE,
+ 	},
++	{
++		.procname	= "tcp_nodelay",
++		.data		= &init_net.ipv4.sysctl_tcp_nodelay,
++		.maxlen		= sizeof(u8),
++		.mode		= 0644,
++		.proc_handler	= proc_dou8vec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= SYSCTL_ONE,
++	},
+ 	{
+ 		.procname	= "tcp_invalid_ratelimit",
+ 		.data		= &init_net.ipv4.sysctl_tcp_invalid_ratelimit,
+diff --git a/net/ipv4/tcp.c b/net/ipv4/tcp.c
+index ac6cb2dc6..2325123dc 100644
+--- a/net/ipv4/tcp.c
++++ b/net/ipv4/tcp.c
+@@ -447,6 +447,9 @@ void tcp_init_sock(struct sock *sk)
+ 	tp->tsoffset = 0;
+ 	tp->rack.reo_wnd_steps = 1;
+ 
++	if (READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_nodelay))
++		tp->nonagle |= (TCP_NAGLE_OFF|TCP_NAGLE_PUSH);
++
+ 	sk->sk_write_space = sk_stream_write_space;
+ 	sock_set_flag(sk, SOCK_USE_WRITE_QUEUE);
+ 
+@@ -715,6 +718,12 @@ void tcp_push(struct sock *sk, int flags, int mss_now,
+ 	skb = tcp_write_queue_tail(sk);
+ 	if (!skb)
+ 		return;
++
++	if (READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_nodelay)) {
++		tp->nonagle |= TCP_NAGLE_OFF|TCP_NAGLE_PUSH;
++		nonagle      = TCP_NAGLE_OFF|TCP_NAGLE_PUSH;
++	}
++
+ 	if (!(flags & MSG_MORE) || forced_push(tp))
+ 		tcp_mark_push(tp, skb);
+ 
+diff --git a/net/ipv4/tcp_ipv4.c b/net/ipv4/tcp_ipv4.c
+index 7a94acbd9..51a4b09b0 100644
+--- a/net/ipv4/tcp_ipv4.c
++++ b/net/ipv4/tcp_ipv4.c
+@@ -2903,6 +2903,7 @@ static int __net_init tcp_sk_init(struct net *net)
+ 	net->ipv4.sysctl_tcp_min_tso_segs = 2;
+ 	net->ipv4.sysctl_tcp_min_rtt_wlen = 300;
+ 	net->ipv4.sysctl_tcp_autocorking = 1;
++	net->ipv4.sysctl_tcp_nodelay = 0;
+ 	net->ipv4.sysctl_tcp_invalid_ratelimit = HZ/2;
+ 	net->ipv4.sysctl_tcp_pacing_ss_ratio = 200;
+ 	net->ipv4.sysctl_tcp_pacing_ca_ratio = 120;
